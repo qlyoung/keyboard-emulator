@@ -3,6 +3,12 @@ keyboard-emulator
 
 A USB HID keyboard emulator in Rust.
 
+Bulding
+-------
+```
+$ rustc keyboard.rs
+```
+
 Usage
 -----
 ```
@@ -13,11 +19,6 @@ where
 * `<layout>` is a layout file specifying the desired keyboard layout
 * `<script>` is an extended DuckyScript script
 * `[output]` is an optional output file; the default is stdout
-
-Caveats
--------
-
-* Currently writes errors and debugging output to stdout
 
 License
 -------

@@ -13,11 +13,13 @@ use std::time::Duration;
 use std::collections::HashMap;
 
 const DEFAULT_DELAY_MS: u64 = 200;
+const ERR_WRITE_STDERR: &'static str = "Could not write to stderr";
 
 struct Config {
     delay: u64,
     layout: Layout,
-    dest: Box<Write>
+    dest: Box<Write>,
+    err: Box<Write>,
 }
 
 struct Layout {
@@ -66,17 +68,11 @@ fn lookup_escape (name: &str) -> Option<(u8, u8)> {
     match name {
         "ALT"       => Some((0x00, 0x04)),
         "BACKSPACE" => Some((0x2A, 0x00)),
-        "CONTROL"   => Some((0x00, 0x01)),
         "DELETE"    => Some((0x4C, 0x00)),
         "ESCAPE"    => Some((0x29, 0x00)),
         "END"       => Some((0x4D, 0x00)),
-        "GUI"       => Some((0x00, 0x08)),
         "HOME"      => Some((0x4A, 0x00)),
         "INSERT"    => Some((0x49, 0x00)),
-        "DARROW"    => Some((0x51, 0x00)),
-        "UARROW"    => Some((0x52, 0x00)),
-        "LARROW"    => Some((0x50, 0x00)),
-        "RARROW"    => Some((0x4F, 0x00)),
         "ENTER"     => Some((0x28, 0x00)),
         "SPACE"     => Some((0x2C, 0x00)),
         "PRNTSCRN"  => Some((0x46, 0x00)),
@@ -102,7 +98,19 @@ fn lookup_escape (name: &str) -> Option<(u8, u8)> {
         "F10"       => Some((0x43, 0x00)),
         "F11"       => Some((0x44, 0x00)),
         "F12"       => Some((0x45, 0x00)),
-        _           => None,
+        "DOWNARROW" | "DARROW" | "DOWN"
+            => Some((0x51, 0x00)),
+        "UPARROW" | "UARROW" | "UP"
+            => Some((0x52, 0x00)),
+        "LEFTARROW" | "LARROW" | "LEFT"
+            => Some((0x50, 0x00)),
+        "RIGHTARROW" | "RARROW" | "RIGHT"
+            => Some((0x4F, 0x00)),
+        "CONTROL" | "CTRL"
+            => Some((0x00, 0x01)),
+        "GUI" | "WINDOWS" | "WIN" | "SUPER" | "COMMAND"
+            => Some((0x00, 0x08)),
+        _ => None
     }
 }
 
@@ -115,7 +123,8 @@ enum ExecError {
     Incomplete,
     Parse(num::ParseIntError),
     UnknownToken(String),
-    NoMapping(char)
+    NoMapping(char),
+    Write(std::io::Error),
 }
 
 fn make_hid_report (layout: &Layout, send: &Vec<CharOrKc>) -> Result<[u8; 8], ExecError>  {
@@ -151,10 +160,10 @@ fn exec_line (line: &str, conf: &mut Config) -> Result<(), ExecError> {
             for c in rest.chars() {
                 chunk.push(CharOrKc::Char(c));
                 let report = make_hid_report(&conf.layout, &chunk)?;
-                let _ = conf.dest.write_all(&report);
+                conf.dest.write_all(&report).map_err(ExecError::Write)?;
                 chunk.clear();
                 // send empty report
-                let _ = conf.dest.write_all(&make_hid_report(&conf.layout, &chunk)?);
+                conf.dest.write_all(&make_hid_report(&conf.layout, &chunk)?).map_err(ExecError::Write)?;
             }
             thread::sleep(Duration::from_millis(conf.delay));
         },
@@ -171,24 +180,24 @@ fn exec_line (line: &str, conf: &mut Config) -> Result<(), ExecError> {
                 }
             };
             let report = make_hid_report(&conf.layout, &chunk)?;
-            let _ = conf.dest.write_all(&report);
+            conf.dest.write_all(&report).map_err(ExecError::Write)?;
             chunk.clear();
             // send empty report
-            let _ = conf.dest.write_all(&make_hid_report(&conf.layout, &chunk)?);
+            conf.dest.write_all(&make_hid_report(&conf.layout, &chunk)?).map_err(ExecError::Write)?;
             thread::sleep(Duration::from_millis(conf.delay));
         },
         "ECHO" => {
             let rest = tokens.fold(String::new(), |mut b, m| { b.push_str(m); b });
-            println!("{}", rest);
+            writeln!(&mut conf.err, "{}", rest).map_err(ExecError::Write)?;
             thread::sleep(Duration::from_millis(conf.delay));
         }
         _ => {
             let mut chunk = vec![CharOrKc::Kc(lookup_escape(&first).ok_or(ExecError::UnknownToken(String::from(first)))?)];
             let report = make_hid_report(&conf.layout, &chunk)?;
-            let _ = conf.dest.write_all(&report);
+            conf.dest.write_all(&report).map_err(ExecError::Write)?;
             chunk.clear();
             // send empty report
-            let _ = conf.dest.write_all(&make_hid_report(&conf.layout, &chunk)?);
+            conf.dest.write_all(&make_hid_report(&conf.layout, &chunk)?).map_err(ExecError::Write)?;
             thread::sleep(Duration::from_millis(conf.delay));
         }
     };
@@ -197,11 +206,12 @@ fn exec_line (line: &str, conf: &mut Config) -> Result<(), ExecError> {
 
 fn main() {
     let ar: Vec<_> = args().collect();
+    let mut stderr: Box<Write> = Box::new(std::io::stderr());
 
     let usage = format!("usage: {} <layout> <script> [output]", ar[0]);
 
     if ar.len() < 3 {
-        println!("{}", usage);
+        writeln!(&mut stderr, "{}", usage).expect(ERR_WRITE_STDERR);
         return ()
     }
 
@@ -210,7 +220,7 @@ fn main() {
     let lf = match File::open(&path) {
         Ok(f) => f,
         Err(e) => {
-            println!("{}", e.to_string());
+            writeln!(stderr, "{}", e.to_string()).expect(ERR_WRITE_STDERR);
             return ()
         }
     };
@@ -219,12 +229,12 @@ fn main() {
         Ok(l) => l,
         Err(e) => {
             match e {
-                LayoutError::Empty => println!("Layout file is empty"),
-                LayoutError::ReadError(e) => println!("Error reading layout file: {}", e.to_string()),
-                LayoutError::BadKeyId(l) => println!("{}: Unintelligible key id", l),
-                LayoutError::MissingKeyId(l) => println!("{}: No key ID", l),
-                LayoutError::BadModifier(l) => println!("{}: Bad modifier byte", l)
-            };
+                LayoutError::Empty => writeln!(stderr, "Layout file is empty"),
+                LayoutError::ReadError(e) => writeln!(stderr, "Error reading layout file: {}", e.to_string()),
+                LayoutError::BadKeyId(l) => writeln!(stderr, "{}: Unintelligible key id", l),
+                LayoutError::MissingKeyId(l) => writeln!(stderr, "{}: No key ID", l),
+                LayoutError::BadModifier(l) => writeln!(stderr, "{}: Bad modifier byte", l)
+            }.expect(ERR_WRITE_STDERR);
             return ()
         }
     };
@@ -234,7 +244,7 @@ fn main() {
     let sf = match File::open(&path) {
         Ok(file) => file,
         Err(e) => {
-            println!("{}", e);
+            writeln!(stderr, "{}", e).expect(ERR_WRITE_STDERR);
             return ()
         }
     };
@@ -246,7 +256,7 @@ fn main() {
             Box::new(match OpenOptions::new().write(true).create(true).open(&path) {
                 Ok(file) => file,
                 Err(e) => {
-                    println!("{}", e);
+                    writeln!(stderr, "{}", e).expect(ERR_WRITE_STDERR);
                     return ();
                 }
             })
@@ -254,8 +264,9 @@ fn main() {
         _ => Box::new(std::io::stdout())
     };
 
+
     // make config
-    let mut conf = Config { delay: DEFAULT_DELAY_MS, layout: layout, dest: output };
+    let mut conf = Config { delay: DEFAULT_DELAY_MS, layout: layout, dest: output, err: stderr };
 
     // REPL
     let mut ln = 1;
@@ -264,18 +275,19 @@ fn main() {
         let aline = match line {
             Ok(l) => l,
             Err(e) => {
-                println!("{}", e.to_string());
+                writeln!(conf.err, "{}", e.to_string()).expect(ERR_WRITE_STDERR);
                 return ()
             }
         };
 
         match exec_line (&aline, &mut conf) {
             Err(e) => match e {
-                ExecError::Incomplete => println!("{}: Incomplete line: {}", ln, aline),
-                ExecError::Parse(e) => println!("{}: Parse error: {}", ln, e.to_string()),
-                ExecError::UnknownToken(t) => println!("{}: Unintelligible keyword: {}", ln, &t),
-                ExecError::NoMapping(c) => println!("{}: No mapping for character: {}", ln, c)
-            },
+                ExecError::Incomplete => writeln!(conf.err, "{}: Incomplete line: {}", ln, aline),
+                ExecError::Parse(e) => writeln!(conf.err, "{}: Parse error: {}", ln, e.to_string()),
+                ExecError::UnknownToken(t) => writeln!(conf.err, "{}: Unintelligible keyword: {}", ln, &t),
+                ExecError::NoMapping(c) => writeln!(conf.err, "{}: No mapping for character: {}", ln, c),
+                ExecError::Write(w) => writeln!(conf.err, "{}: Error writing HID report: {}", ln, w.to_string()),
+            }.expect(ERR_WRITE_STDERR),
             Ok(_) => (),
         };
         ln += 1;

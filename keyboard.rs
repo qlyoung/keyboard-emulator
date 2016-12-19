@@ -45,15 +45,15 @@ fn load_layout (layoutfile: &File) -> Result<Layout, LayoutError> {
     let mut all_kc = HashMap::new();
     for line in lines {
         let mut line = line.map_err(LayoutError::ReadError)?.replace("0x", "");
-        if line.len() == 0 {
+        if line.is_empty() {
             continue;
         }
         let cp = line.remove(0);
 
         let mut split = line.split_whitespace();
-        let id = u8::from_str_radix(&split.next().ok_or(LayoutError::MissingKeyId(ln))?, 16)
+        let id = u8::from_str_radix(split.next().ok_or_else(|| LayoutError::MissingKeyId(ln))?, 16)
                     .map_err(|_| LayoutError::BadKeyId(ln))?;
-        let md = u8::from_str_radix(&split.next().unwrap_or("00"), 16)
+        let md = u8::from_str_radix(split.next().unwrap_or("00"), 16)
                     .map_err(|_| LayoutError::BadModifier(ln))?;
 
         all_kc.insert(cp, (id, md));
@@ -127,13 +127,13 @@ enum ExecError {
     Write(std::io::Error),
 }
 
-fn make_hid_report (layout: &Layout, send: &Vec<CharOrKc>) -> Result<[u8; 8], ExecError>  {
+fn make_hid_report (layout: &Layout, send: &[CharOrKc]) -> Result<[u8; 8], ExecError>  {
     let mut report = [0; 8];
     for i in 0..min(6, send.len()) {
         let kc: (u8, u8) = match send[i] {
             CharOrKc::Char(c) => {
                 if c as u32 == 0 { continue; }
-                *layout.map.get(&c).ok_or(ExecError::NoMapping(c))?
+                *layout.map.get(&c).ok_or_else(|| ExecError::NoMapping(c))?
             },
             CharOrKc::Kc(k) => k
         };
@@ -176,7 +176,7 @@ fn exec_line (line: &str, conf: &mut Config) -> Result<(), ExecError> {
             for token in tokens {
                 match token.len() {
                     1 => chunk.push(CharOrKc::Char(token.chars().next().unwrap())),
-                    _ => chunk.push(CharOrKc::Kc(lookup_escape(&token).ok_or(ExecError::UnknownToken(String::from(token)))?))
+                    _ => chunk.push(CharOrKc::Kc(lookup_escape(token).ok_or_else(|| ExecError::UnknownToken(String::from(token)))?))
                 }
             };
             let report = make_hid_report(&conf.layout, &chunk)?;
@@ -280,16 +280,13 @@ fn main() {
             }
         };
 
-        match exec_line (&aline, &mut conf) {
-            Err(e) => match e {
-                ExecError::Incomplete => writeln!(conf.err, "{}: Incomplete line: {}", ln, aline),
-                ExecError::Parse(e) => writeln!(conf.err, "{}: Parse error: {}", ln, e.to_string()),
-                ExecError::UnknownToken(t) => writeln!(conf.err, "{}: Unintelligible keyword: {}", ln, &t),
-                ExecError::NoMapping(c) => writeln!(conf.err, "{}: No mapping for character: {}", ln, c),
-                ExecError::Write(w) => writeln!(conf.err, "{}: Error writing HID report: {}", ln, w.to_string()),
-            }.expect(ERR_WRITE_STDERR),
-            Ok(_) => (),
-        };
+        if let Err(e) = exec_line(&aline, &mut conf) { match e {
+            ExecError::Incomplete => writeln!(conf.err, "{}: Incomplete line: {}", ln, aline),
+            ExecError::Parse(e) => writeln!(conf.err, "{}: Parse error: {}", ln, e.to_string()),
+            ExecError::UnknownToken(t) => writeln!(conf.err, "{}: Unintelligible keyword: {}", ln, &t),
+            ExecError::NoMapping(c) => writeln!(conf.err, "{}: No mapping for character: {}", ln, c),
+            ExecError::Write(w) => writeln!(conf.err, "{}: Error writing HID report: {}", ln, w.to_string()),
+        }.expect(ERR_WRITE_STDERR)}
         ln += 1;
     }
 }

@@ -155,7 +155,12 @@ fn exec_line (line: &str, conf: &mut Config) -> Result<(), ExecError> {
             conf.delay = tokens.next().unwrap_or(&DEFAULT_DELAY_MS.to_string()).parse().map_err(ExecError::Parse)?;
         },
         "STRING" => {
-            let rest = tokens.fold(String::new(), |mut b, m| { b.push_str(m); b });
+            let mut rest = tokens.fold(String::new(), |mut b, m| {
+                b.push_str(m);
+                b.push_str(" ");
+                b
+            });
+            rest.pop();
             let mut chunk = vec![];
             for c in rest.chars() {
                 chunk.push(CharOrKc::Char(c));

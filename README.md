@@ -20,6 +20,10 @@ where
 * `<script>` is an extended DuckyScript script
 * `[output]` is an optional output file; the default is stdout
 
+But why don't you use a lazy static hash map?
+---------------------------------------------
+Because O(50) is a price I'm willing to pay for zero dependencies.
+
 License
 -------
 

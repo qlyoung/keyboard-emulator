@@ -3,8 +3,8 @@ keyboard-emulator
 
 A USB HID keyboard emulator in Rust.
 
-Bulding
--------
+Building
+--------
 ```
 $ rustc keyboard.rs
 ```
